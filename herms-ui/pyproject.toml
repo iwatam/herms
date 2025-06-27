@@ -1,0 +1,24 @@
+[project]
+name = "herms-ui"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "iwatam",email = "kp9m-iwt@asahi-net.or.jp"}
+]
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "herms",
+    "pyside6 (>=6.9.1,<7.0.0)",
+]
+
+[tool.poetry]
+packages = [{include = "herms_ui", from = "src"}]
+
+[tool.poetry.group.dev.dependencies]
+herms = {path = "../herms", develop = true }
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

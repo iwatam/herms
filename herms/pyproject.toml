@@ -1,0 +1,25 @@
+[project]
+name = "herms"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "iwatam",email = "kp9m-iwt@asahi-net.or.jp"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pyyaml (>=6.0.2,<7.0.0)",
+    "lark",
+    "jsonschema (>=4.24.0,<5.0.0)",
+]
+
+[project.scripts]
+herms = 'herms.cli:cli'
+
+[tool.poetry]
+packages = [{include = "herms", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

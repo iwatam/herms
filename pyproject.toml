@@ -1,0 +1,33 @@
+[project]
+name = "herms-monorepo"
+version = "0.1.0"
+description = "Monorepo with herms project"
+authors = [
+        {name = "iwatam",email = "kp9m-iwt@asahi-net.or.jp"}
+]
+readme = "README.md"
+dependencies = [
+    "herms",
+    "herms-ui"
+]
+requires-python = ">=3.13,<3.14"
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.dependencies]
+herms = {path = "./herms", develop = true }
+herms-ui = {path = "./herms-ui", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.15.0"
+pytest = "^8.3.5"
+sphinx = "^8.2.3"
+sphinx-autodoc-typehints = "^3.2.0"
+invoke = "^2.2.0"
+myst-parser = "^4.0.1"
+sphinx-autobuild = "^2024.10.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"   
