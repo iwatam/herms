@@ -24,20 +24,22 @@ from .node import Node
 from .nodetype import NodeType
 from .app import App
 from .cli import CliApp
-from .repository import Repository
+from .repository import Repository,RepositoryConfig
 from .service import Service
 from .tag import Tag
+from .state import State
 from .config import Json,JsonObject,JsonSchema
 
 __all__ = [
     "App",
     "CliApp",
-    "Repository",
+    "Repository","RepositoryConfig",
     "Service",
     "Query",
     "Node",
     "NodeType",
     "Tag",
+    "State",
     "Json","JsonObject","JsonSchema",
     "Job",
     "use",

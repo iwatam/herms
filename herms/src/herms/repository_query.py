@@ -90,7 +90,7 @@ class AllExecutor(Executor):
     def __init__(self,arg:Repository):
         self.repo=arg
         self.iterable=True
-        self._len=sum((len(x) for x in self.repo.type_nodes.values()))
+        self._len=sum((len(x) for x in self.repo.nodes.values()))
 
     def match(self, node: Node) -> bool:
         return True
@@ -99,8 +99,7 @@ class AllExecutor(Executor):
         return self._len
     
     def items(self) -> Iterable[Node]:
-        for x in self.repo.type_nodes.values():
-            yield from x.values()
+        return self.repo.nodes.iterate()
 
 class NodeTypeExecutor(Executor):
     nodetype:NodeType
@@ -108,7 +107,7 @@ class NodeTypeExecutor(Executor):
     def __init__(self,arg:NodeType):
         self.nodetype=arg
         self.iterable=True
-        self._len=len(arg.owner.type_nodes[self.nodetype])
+        self._len=len(arg.owner.nodes[self.nodetype])
 
     def match(self, node: Node) -> bool:
         return self.nodetype in node.type.ancestors()
@@ -117,7 +116,7 @@ class NodeTypeExecutor(Executor):
         return self._len
     
     def items(self) -> Iterable[Node]:
-        return self.nodetype.owner.nodes(self.nodetype)
+        return self.nodetype.owner.nodes.iterate(self.nodetype)
 
 class NodeExecutor(Executor):
     node:Node
@@ -275,6 +274,9 @@ class RepositoryQueryInterface(QueryInterface):
                 node=self.repo.node(query.name,None)
                 if node is not None:
                     return NodeExecutor(node)
+                state=self.repo.states.get(query.name)
+                if state is not None:
+                    return StateExecutor(state)
                 tag=self.repo.tag(query.name)
                 if tag is None:
                     raise QueryFormatException(f"No node or tag found for '{query.name}'.")

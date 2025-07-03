@@ -34,6 +34,9 @@ class OwnedDict(dict[str,T],Generic[T,OWNER]):
         self.owner=owner
 
     def __setitem__(self, key:str, value:T):
-            super().__setitem__(key, value)
-            obj=cast(OwnedBy[OWNER],value)
-            obj.assign(self.owner,key)
+        super().__setitem__(key, value)
+        obj=cast(OwnedBy[OWNER],value)
+        obj.assign(self.owner,key)
+
+    def add(self,value:OwnedBy[OWNER]):
+        self[value.name]=cast(T,value)

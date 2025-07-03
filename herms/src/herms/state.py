@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast, ClassVar
 from .query import Query
 
 from .base import InRepository
+from .config import Json,JsonSchema
 if TYPE_CHECKING:
-    from .config import Json,JsonSchema
     from .repository import Repository
     from .service import Service
 
@@ -86,12 +86,13 @@ class State(InRepository):
         if "lifecycle" in cfg:
             self.lifecycle=cfg.get("lifecycle")=='initial'
         self.transitions={}
-        for name,c in cfg.get('transitions',{}):
+        for name,c in cfg.get('transitions',{s.name:False for s in self.owner.states.values()}).items():
             tostate=self.owner.states[name]
             tr=Transition()
             tr.fromstate=self
             tr.tostate=tostate
-            tr.configure(c)
+            tr.configure(cast(Json,c))
+            self.transitions[tostate]=tr
         services=cfg.get("services")
         if services is not None:
             if isinstance(services,str):

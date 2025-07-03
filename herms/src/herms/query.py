@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import sys
-from typing import  TYPE_CHECKING, Any, Callable, ClassVar, Generic, Iterable, Literal, TypeVar, cast
+from typing import  TYPE_CHECKING, Any, Callable, ClassVar, Generic, Iterable, Literal, TypeVar, cast, overload
 
 from lark import Lark, Token, Tree
 from . import datatype
@@ -75,6 +75,12 @@ LOGIOP: /[&|]/
         else:
             self.tree=None
             self.expr=Expression.All
+    
+    def __hash__(self):
+        return hash(self.text)
+    
+    def __eq__(self,other:Any):
+        return isinstance(other,Query) and self.text==other.text
     #
     # API
     #
@@ -480,3 +486,27 @@ class QuerySelector(list[tuple[Query,T]],Generic[T]):
                 self.add(Query(k,repo),v)
         else:
             self.default=val
+
+class QueryCache:
+    cache:dict[Query,Executor]
+    qi:QueryInterface
+
+    def __init__(self,qi:QueryInterface):
+        self.qi=qi
+        self.cache={}
+    
+    @overload
+    def __call__(self,query:Query,node:Node)->bool: ...
+    @overload
+    def __call__(self,query:Query)->Executor: ...
+
+    def __call__(self,query:Query,node:Node|None=None)->bool|Executor:
+        f=self.cache.get(query)
+        if f is None:
+            f=query.apply(self.qi)
+            self.cache[query]=f
+        if node is not None:
+            return f.match(node)
+        else:
+            return f
+        

@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import ClassVar
-
-from .state import State
+from typing import ClassVar, Iterable
+from collections.abc import AsyncGenerator
 from .config import Json, JsonSchema
 from .base import InRepository
 from .node import Node
@@ -47,6 +46,9 @@ class Service(InRepository):
     def node_config_schema(self)->JsonSchema:
         return {"type":"object"}
 
+
+    def consumers(self):
+        return (x for x in self.owner.services.values() if x is not self)
 
     #
     # path
@@ -94,6 +96,14 @@ class Service(InRepository):
             dir = dir / node.name
         return dir
 
+    def node_path(self,node:Node,default:Path)->Path:
+        """
+        各ノードに対するサービスのパスを返します。
+
+        特に指定がない場合はdefaultをそのまま返します。
+        """
+        return default
+
     #
     # Basic operation
     #
@@ -112,7 +122,7 @@ class Service(InRepository):
         """この Service に適用できる状態のリストを返します。"""
         return [Service.ACTIVE]
 
-    def init(self):
+    async def init(self):
         """
         初期化をします。
 
@@ -120,20 +130,48 @@ class Service(InRepository):
         """
         pass
 
-    def close(self):
-        """終了処理をします。
+    async def close(self):
+        """
+        終了処理をします。
 
         終了時に1回呼ばれます。
         """
         pass
 
-    def update(self, *node:Node,intensive:bool=False):
-        """各サービスの処理を実行します。
+    async def update(self, *node:Node,intensive:bool=False)->Iterable[Node]:
         """
-        pass
+        各サービスの処理を実行します。
 
-    def state(self, *node:Node,oldstate:str,newstate:str):
-        """状態が変更されたときの処理を行います。
+        :arg:nodeが指定された場合はその:class:Nodeだけを、指定されない場合はすべての:class:Nodeを対象とします。
 
+        内容の変更があった:class:Nodeを返します。
         """
-        pass
+        return ()
+
+    async def state(self, *args:tuple[Node,str])->AsyncGenerator[Iterable[Node],Iterable[Node]]:
+        """
+        状態が変更されたときの処理を行います。
+
+        最初に、状態変更が可能かどうかをチェックして、変更可能なNodeのリストをyieldで返します。
+        yieldの返値は、実際に変更すべきNodeのリストです。その後、実際の変更処理を行います。
+        """
+        yield (x[0] for x in args)
+
+    async def modified(self,*nodes:Node)->Iterable[Node]:
+        """
+        ノードの内容が変更されたとき呼ばれます。
+
+        これによってノードの内容をさらに変化させた場合、そのノードのリストを返します。
+        """
+        return ()
+
+    async def move_directory(self,*args:tuple[Node,Path]):
+        """
+        ノードに対するサービスのパスが変更されたとき呼ばれます。
+
+        実際に移動する処理をします。
+        """
+        for node,dest in args:
+            src=node.node_service_path[self]
+            if src!=dest:
+                src.rename(dest)

@@ -50,6 +50,18 @@ def load_config_file(file: Path, schema: JsonSchema) -> Json:
     jsonschema.validate(ret,schema)
     return ret
 
+def dump_config_file(file:Path,val:Json)->None:
+    f = config_file_of(file)
+    if f is None:
+        f=file
+    if f.suffix == ".json":
+        with open(f, "w",encoding='utf-8') as f:
+            json.dump(val,f)
+    else:
+        with open(f, "w",encoding='utf-8') as f:
+            yaml.safe_dump(val,f)
+
+
 class TypedConfig(TypedDict):
     type:str
 class Configurable(Protocol):
@@ -99,7 +111,11 @@ def load_object(config: dict[str,str|JsonObject]|None,type:Type[OBJ])->Iterable[
         obj.configure(cfg)
 
 def load_object_static(config: dict[str,Json]|None,cls:Type[OBJ])->Iterable[OBJ]:
-    """オブジェクトを作成します。"""
+    """オブジェクトを作成します。
+    
+    作成されたオブジェクトが順番に返されます。それらをすべて読み取った後に、configure()が実行されます。
+    そのため、返されたオブジェクトはすべて読み取らなくてはなりません。
+    """
     if config is None:
         return
     objs:list[tuple[OBJ,Json]]=[]

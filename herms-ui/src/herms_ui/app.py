@@ -1,6 +1,6 @@
 import sys
 import herms
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow, QFrame
 
 class UiApp(herms.App):
     title:str="herms"
@@ -23,6 +23,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(title)
         self.resize(800, 600)
+
+class MainPanel(QFrame):
+    def __init__(self):
+        pass
 
 # class App(tkinter.Tk):
 #     def __init__(self,services):

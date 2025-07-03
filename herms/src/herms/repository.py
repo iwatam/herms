@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol, TypedDict, cast
 
-
-
-from .base import OwnedDict
-
-
-from .config import Json, JsonObject, JsonSchema, config_file_of, is_config_file, load_config_file, load_object, load_object_static
+from . import handler
+from .base import OwnedBy, OwnedDict
+from .config import Json, JsonObject, JsonSchema, config_file_of, dump_config_file, is_config_file, load_config_file, load_object, load_object_static
 from .node import Node
 from .nodetype import NodeType
 from .service import Service
 from .tag import Tag, TagConfig
-from .query import Executor, Query, QuerySelector
+from .query import Executor, Query, QueryCache, QuerySelector
 from .repository_query import AllExecutor, AndExecutor, RepositoryQueryInterface
 from .state import State
 
@@ -79,8 +76,7 @@ class Repository:
         }
     }
 
-    type_nodes: dict[NodeType, OwnedDict[Node,"Repository"]]
-    """プロジェクトの辞書"""
+    nodes:NodeDict
 
     services: OwnedDict[Service,"Repository"]
     """サービスの辞書"""
@@ -88,8 +84,7 @@ class Repository:
     types: OwnedDict[NodeType,"Repository"]
     """ノードタイプの辞書"""
 
-    tags: OwnedDict[Tag,"Repository"]
-    tag_names: dict[str, Tag | list[Tag]]
+    tags: TagDict
 
     states:OwnedDict[State,"Repository"]
 
@@ -99,35 +94,18 @@ class Repository:
             
     def tag(self, name: str) -> Tag | None:
         """タグを取得します。"""
-        names = name.split(".")
-        if names[-1] in self.tag_names:
-            x = self.tag_names[name]
-            if not isinstance(x, list):
-                return x
-            else:
-                for y in x:
-                    if y.match(names):
-                        return y
-        return None
+        return self.tags.byname(name)
     def all_tags(self)->Iterable[Tag]:
-        for x in self.tags.values():
-            yield from x.walk()
+        return self.tags.all()
     def tag_or_create(self,name:str,parent:Tag|None)->Tag:
         tag=self.tag(name)
         if tag is None:
             tag=Tag()
             tag.parent=parent
             tag.name=name
-            self.add_tag(tag)
+            self.tags.add(tag)
         return tag
 
-    def nodes(self,type: NodeType | str | None=None)->Iterable[Node]:
-        if isinstance(type, str):
-            type = self.types[type]
-        if type is None:
-            return (y for x in self.type_nodes.values() for y in x.values())
-        else:
-            return self.type_nodes[type].values()
 
     def node(self, arg: str, type: NodeType | str | None) -> Node | None:
         if isinstance(type, str):
@@ -137,11 +115,11 @@ class Repository:
             type=self.types[arg[0:sep]]
             arg=arg[sep+1:]
         if type is not None:
-            return self.type_nodes[type].get(arg,None)
+            return self.nodes[type].get(arg,None)
         else:
             ret:Node|None=None
             for type in self.types.values():
-                n=self.type_nodes[type].get(arg,None)
+                n=self.nodes[type].get(arg,None)
                 if n is not None:
                     if ret is not None:
                         raise KeyError(arg+": ambiguous name (in "+ret.type.name+" and "+type.name+").")
@@ -221,10 +199,9 @@ class Repository:
     def __init__(self) -> None:
         self.services = OwnedDict(self)
         self.types = OwnedDict(self)
-        self.tags = OwnedDict(self)
-        self.tag_names = {}
+        self.tags = TagDict(self)
         self.states=OwnedDict(self)
-        self.type_nodes=defaultdict(lambda :OwnedDict(self))
+        self.nodes=NodeDict(self)
         self.query_interface=RepositoryQueryInterface(self)
         self.service_path={}
         self.node_path=QueryPathSelector(self,None, self.DEFAULT_NODE_PATH)
@@ -273,23 +250,26 @@ class Repository:
         self._create_nodetypes(config.get("types",None))
         self._create_services(config.get("services",None))
         self._create_states(config.get("states",None))
+        handler.provide(self)
+        for x in self.services.values():
+            handler.provide(x)
         self._create_nodes()
 
     def _create_nodetypes(self,config:dict[str,Json]|None)->None:
         self.types.clear()
         for obj in load_object_static(config,NodeType):
-            self.add_nodetype(obj)
+            self.types.add(obj)
 
     def _create_tags(self, config: TagConfig|None) -> None:
         self.tags.clear()
         for tag in Tag.configure(config):
-            self.add_tag(tag)
+            self.tags.add(tag)
 
     def _create_services(self, config: dict[str,str|JsonObject]|None):
         """サービスを作成します。"""
         self.services.clear()
         for service in load_object(config,Service):
-            self.add_service(service)
+            self.services.add(service)
 
     def _create_states(self, config: dict[str,Json]|None):
         """状態を作成します。"""
@@ -297,14 +277,13 @@ class Repository:
         if config is None:
             return
         for state in load_object_static(config,State):
-            self.add_state(state)
+            self.states.add(state)
     def _create_nodes(self) -> None:
         """Nodeを作成します。"""
         cfgs: list[tuple[Node, JsonObject]] = []
+        self.nodes.clear()
         for type in self.types.values():
             path = self.config_dir / type.name
-            nodes=self.type_nodes[type]
-            nodes.clear()
             schema=type.node_config_schema()
             if path.is_dir():
                 for p in path.iterdir():
@@ -317,45 +296,43 @@ class Repository:
                         cfg=cast(JsonObject,load_config_file(file,schema))
                         node=Node(type)
                         node.name=p.stem
-                        self.add_node(node)
+                        self.nodes.add(node)
                         cfgs.append((node,cfg))
         for node, cfg in cfgs:
             node.configure(cfg)
-    
+        
+        self.init_nodes(*self.nodes.iterate())
+
+    def init_nodes(self,*nodes:Node):
+        np=self.node_path_resolver()
+        for node in nodes:
+            node.node_path=np(node)
+        for service in self.services.values():
+            nsp=self.node_service_path_resolver(service)
+            for node in nodes:
+                node.node_service_path[service]=nsp(node)
+
     def refresh(self):
         """NodeTypeの内容が変わったとき呼ばれます。"""
         self.node_path.refresh(self)
         self.node_service_path.refresh(self)
 
-    #
-    # Construction by code
-    #
-    def add_nodetype(self,obj:NodeType):
-        self.types[obj.name]=obj
-    def add_service(self,obj:Service):
-        self.services[obj.name] = obj
-    def add_tag(self,obj:Tag):
-        if obj.parent is None:
-            self.tags[obj.name]=obj
-        else:
-            obj.parent.children[obj.name]=obj
-        for x in obj.walk():
-            x.assign(self,x.name)
-            if x.name in self.tag_names:
-                lst=self.tag_names[x.name]
-                if isinstance(lst,list):
-                    if x not in lst:
-                        lst.append(x)
-                else:
-                    if x!=lst:
-                        self.tag_names[x.name]=[x,lst]
-            else:
-                self.tag_names[x.name]=x
-    def add_state(self,obj:State):
-        self.states[obj.name]=obj
-    def add_node(self,obj:Node):
-        self.type_nodes[obj.type][obj.name]=obj
+    def consumers(self):
+        return self.services.values()
 
+    def save_nodes(self,*nodes:Node):
+        for node in nodes:
+            path = self.config_dir / node.type.name / node.name
+            if is_config_file(path):
+                file=path
+            elif path.is_dir():
+                file=config_file_of(path / node.type.name)
+            else:
+                file=None
+            if file is None:
+                file=path.with_suffix(".yaml")
+            dump_config_file(file,node.dump())
+        
     #
     # Queries
     #
@@ -372,27 +349,98 @@ class Repository:
     #
     # Actions
     #
-    @contextmanager
-    def run(self, *nodes: Node):
-        """Repositoryに何らかの操作をするときに、with文で使います。"""
-        self.init(*nodes)
+    @asynccontextmanager
+    async def run(self):
+        """実行開始時にwith文で使います。"""
+        await self.init()
         yield
-        self.close()
+        await self.close()
 
-    def init(self, *nodes: Node):
-        """Repositoryに何らかの操作をする前に呼びます。"""
+    async def init(self):
+        """実行前に呼びます。"""
         for s in self.services.values():
-            s.init()
+            await s.init()
 
-    def close(self):
-        """Repositoryへの操作が終わった後に呼びます。"""
+    async def close(self):
+        """実行終了時に呼びます。"""
         for s in self.services.values():
-            s.close()
+            await s.close()
 
-    def update(self, *nodes: Node, intensive:bool=False):
+    async def update(self, *arg: Node, intensive:bool=False):
         """各サービスで必要とする処理をします。"""
-        for s in self.services.values():
-            s.update(*nodes)
+
+        nodes=set(arg)
+        while True:
+            modified:set[Node]=set()
+            for s in self.services.values():
+                modified.update(await s.update(*nodes))
+            if not modified:
+                break
+            nodes=await self.modified(*modified)
+            if not nodes:
+                break
+
+    async def state(self,*nodes:Node,state:State|None=None)->list[Node]:
+        """
+        状態を変更します。
+
+        :arg:stateがNoneの場合は、自動遷移をチェックします。
+
+        状態を変更できたNodeを返します。
+        """
+        cache=QueryCache(self.query_interface)
+        rets:list[tuple[Node,State]]=[]
+        for node in nodes:
+            if state is None:
+                for next,tr in node.state.transitions.items():
+                    if tr.auto and cache(tr.condition,node):
+                        state=next
+                        break
+                if state is None:
+                    continue
+            else:
+                tr=node.state.transitions.get(state)
+                if tr is None:
+                    continue
+                if not cache(tr.condition,node):
+                    continue
+            rets.append((node,state))
+        if rets:
+            gens:list[AsyncGenerator[Iterable[Node],Iterable[Node]]]=[]
+            count:dict[Node,int]={}
+            for service in self.services.values():
+                gen=service.state(*((node,state.services.get(service,"")) for node,state in rets))
+                for n in await anext(gen):
+                    count[n]=count.get(n,0)+1
+                gens.append(gen)
+            succeeds=[n for n,c in count.items() if c==len(self.services)]
+            for node,state in rets:
+                node.state=state
+            for gen in gens:
+                try:
+                    await gen.asend(succeeds)
+                except StopAsyncIteration:
+                    pass
+            await self.modified(*succeeds)
+            return succeeds
+        else:
+            return []
+
+    async def modified(self,*nodes:Node)->set[Node]:
+        """
+        内容に変更があったとき呼びます。
+
+        さらに内容に変化のあった:class:Nodeを返します。
+        """
+        _nodes:list[Node]=list(nodes)
+        modified:set[Node]=set()
+        while _nodes:
+            for service in self.services.values():
+                modified.update(await service.modified(*_nodes))
+            _nodes=await self.state(*_nodes)
+            modified.update(_nodes)
+        self.save_nodes(*nodes)
+        return modified
 
 class QueryPathSelector(QuerySelector[str]):
     def resolver(self,repo:Repository,args:dict[str,Any]={}):
@@ -404,3 +452,79 @@ class QueryPathSelector(QuerySelector[str]):
 
 class NotifyRepositoryStructureChanged(Protocol):
     def refresh(self,repo:Repository):...
+
+class TagDict(OwnedDict[Tag,Repository]):
+    tag_names: dict[str, Tag | list[Tag]]
+
+    def __init__(self,owner:Repository):
+        super().__init__(owner)
+        self.tag_names={}
+
+    def add(self,value:OwnedBy[Repository]):
+        obj=cast(Tag,value)
+        if obj.parent is None:
+            self[obj.name]=obj
+        else:
+            obj.parent.children[obj.name]=obj
+        for x in obj.walk():
+            x.assign(self.owner,x.name)
+            if x.name in self.tag_names:
+                lst=self.tag_names[x.name]
+                if isinstance(lst,list):
+                    if x not in lst:
+                        lst.append(x)
+                else:
+                    if x!=lst:
+                        self.tag_names[x.name]=[x,lst]
+            else:
+                self.tag_names[x.name]=x
+    def delete(self,value:Tag):
+        for x in value.walk():
+            lst=self.tag_names[x.name]
+            if isinstance(lst,list):
+                lst.remove(x)
+                if len(lst)==1:
+                    self.tag_names[x.name]=lst[0]
+            else:
+                del self.tag_names[x.name]
+        if value.parent is None:
+            del self[value.name]
+        else:
+            del value.parent.children[value.name]
+
+    def byname(self,name:str)->Tag|None:
+        """タグを取得します。"""
+        names = name.split(".")
+        if names[-1] in self.tag_names:
+            x = self.tag_names[name]
+            if not isinstance(x, list):
+                return x
+            else:
+                for y in x:
+                    if y.match(names):
+                        return y
+        return None
+    
+    def all(self)->Iterable[Tag]:
+        for x in self.values():
+            yield from x.walk()
+
+class NodeDict(dict[NodeType, OwnedDict[Node,Repository]]):
+    repo:Repository
+    def __init__(self,repo:Repository):
+        self.repo=repo
+
+    def iterate(self,type: NodeType | str | None=None)->Iterable[Node]:
+        if isinstance(type,str):
+            type=self.repo.types[type]
+        if type is None:
+            return (y for x in self.values() for y in x.values())
+        else:
+            return self[type].values()
+
+    def add(self,node:Node):
+        dic=self.get(node.type)
+        if dic is None:
+            dic=OwnedDict[Node,Repository](self.repo)
+            self[node.type]=dic
+        dic[node.name]=node

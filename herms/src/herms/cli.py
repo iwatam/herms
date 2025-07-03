@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import builtins
 import json
 import logging
 import sys
-from typing import Any, Callable, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Awaitable, Callable, Literal, TypeAlias, TypedDict, cast
 
 import yaml
 
@@ -15,7 +16,7 @@ from .handler import apply
 from .app import App
 
 CommandFunc: TypeAlias = Callable[
-    [argparse.ArgumentParser], Callable[[argparse.Namespace], None]
+    [argparse.ArgumentParser], Callable[[argparse.Namespace], None|Awaitable[None]]
 ]
 
 
@@ -79,12 +80,15 @@ class CliApp(App):
             p.set_defaults(func=f)
         parser.set_defaults(func=None)
         args = parser.parse_args(self.args)
-        self.repository.init()
         if args.func is not None:
-            args.func(args)
+            async def _():
+                async with self.repository.run():
+                    ret=args.func(args)
+                    if ret is not None:
+                        await ret
+            asyncio.run(_())
         else:
             parser.print_help()
-        self.repository.close()
 
     #
     # protected interface
@@ -149,12 +153,12 @@ class CliApp(App):
             parser.add_argument("-i", "--intensive", action="store_true", default=False)
             self.add_nodes_argument(parser)
 
-            def _(args: argparse.Namespace)->None:
-                exec=self.get_nodes_from_args(args)
-                with self.repository.run():
-                    self.repository.update(
-                        *exec.items(), intensive=args.intensive
-                    )
+            async def _(args: argparse.Namespace)->None:
+                exec=self.get_nodes_from_args_or_none(args)
+                if exec is None:
+                    await self.repository.update(intensive=args.intensive)
+                else:
+                    await self.repository.update(*exec.items(), intensive=args.intensive)
 
             return _
 
@@ -166,7 +170,7 @@ class CliApp(App):
             parser.add_argument("-p", "--property", action="append", default=[])
             self.add_nodes_argument(parser)
 
-            def _(args:argparse.Namespace):
+            async def _(args:argparse.Namespace):
                 exec=self.get_nodes_from_args(args)
                 sys.stdout.write(
                     self.format(
@@ -177,6 +181,18 @@ class CliApp(App):
 
             return _
 
+        @self.command()
+        def state(parser: argparse.ArgumentParser): # type: ignore
+            parser.add_argument(
+                "state", choices=self.repository.states.keys()
+            )
+            self.add_nodes_argument(parser)
+
+            async def _(args:argparse.Namespace):
+                exec=self.get_nodes_from_args(args)
+                await self.repository.state(*exec.items(),state=self.repository.states[args.state])
+
+            return _
         @self.command()
         def config(parser: argparse.ArgumentParser): # type: ignore
             sub = parser.add_subparsers()
@@ -200,8 +216,16 @@ class CliApp(App):
         parser.add_argument("query", nargs="*", help="Node query")
 
     def get_nodes_from_args(self, args: argparse.Namespace) -> Executor:
-        return self.repository.query(" ".join(args.query))
+        text=" ".join(args.query)
+        return self.repository.query(text)
 
+    def get_nodes_from_args_or_none(self, args: argparse.Namespace) -> Executor|None:
+        text=" ".join(args.query)
+        if text:
+            return self.repository.query(text)
+        else:
+            return None
+        
     def format(self, val: dict[Any,Any] | list[Any], type: Literal["json", "yaml", "csv"] = "json"):
         if type == "json":
             return json.dumps(val)

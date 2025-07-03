@@ -10,9 +10,10 @@
 提供者は、使用者になる可能性があるオブジェクトそれぞれに対して、:func:apply()を呼びます。
 """
 
+from collections.abc import Iterable
 import sys
 from types import MethodType, ModuleType
-from typing import Any, Callable, Type, TypeAlias, TypeVar
+from typing import Any, Callable, Protocol, Type, TypeAlias, TypeVar
 
 T = TypeVar("T")
 HandlerFunc: TypeAlias = Callable[[T, Any], None]
@@ -21,6 +22,8 @@ HandlerFuncDecorator: TypeAlias = Callable[[HandlerFunc[T]], HandlerFunc[T]]
 _functions: list[tuple[str, HandlerFunc[Any]]] = []
 _table: dict[Type[object], dict[Type[object], HandlerFunc[Any]]] = {}
 
+class Provider(Protocol):
+    def consumers(self)->Iterable[Any]: ...
 
 def _resolve_name(name: str, module: ModuleType | None = None)->Any:
     names=name.split(":")
@@ -73,7 +76,7 @@ def use(name: str) -> HandlerFuncDecorator[Any]:
     return deco
 
 
-def apply(provider: object, user: object):
+def apply(provider: object, consumer: object):
     """
     :func:use()でデコレートされたメソッドを呼び出します。
 
@@ -84,9 +87,15 @@ def apply(provider: object, user: object):
         table = _table.get(provs, None)
         if table is not None:
             funcs = {}
-            for users in user.__class__.__mro__:
-                f = table.get(users, None)
+            for consumers in consumer.__class__.__mro__:
+                f = table.get(consumers, None)
                 if f is not None and f.__name__ not in funcs:
                     funcs[f.__name__] = True
-                    m = MethodType(f, user)
+                    m = MethodType(f, consumer)
                     m(provider)
+
+
+
+def provide(provider:Provider):
+    for x in provider.consumers():
+        apply(provider,x)
